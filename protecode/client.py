@@ -329,6 +329,15 @@ class ProtecodeApi:
             json=triage_dict,
         ).json()
 
+    def delete_triage(
+        self,
+        triage_id: int,
+    ):
+        self._delete(
+            url=self._routes.triage(),
+            params={'id': triage_id},
+        )
+
     # --- "rest" routes (undocumented API)
 
     def login(self):

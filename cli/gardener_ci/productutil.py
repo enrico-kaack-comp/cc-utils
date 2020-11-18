@@ -29,6 +29,9 @@ from protecode.util import (
     upload_grouped_images,
     ProcessingMode
 )
+from protecode.model import (
+    TriageScope,
+)
 import product.xml
 
 
@@ -149,3 +152,78 @@ def retrieve_component_descriptor(
         fail('no component descriptor found: {n}:{v}'.format(n=name, v=version))
 
     print(resolved_descriptor)
+
+
+def _find_redundant_triages(
+    triages,
+):
+    ci_description_prefixes = [
+        '[ci] vulnerability was not reported by GCR at',
+        '[ci] vulnerability was assessed by GCR at',
+        '[ci] vulnerability was not found by GCR at',
+        '[ci] imported from',
+    ]
+    known_triages = []
+    for triage in triages:
+        if triage.scope() is not TriageScope.RESULT:
+            continue
+
+        triage_identifier = (
+            triage.vulnerability_id(), triage.component_version()
+        )
+
+        if not (any([triage.description().startswith(p) for p in ci_description_prefixes])):
+            continue
+
+        if triage_identifier not in known_triages:
+            known_triages.append(triage_identifier)
+            continue
+
+        print(f'{triage.component_name()}:{triage.vulnerability_id()} | {triage.description()}')
+
+        yield triage.id()
+
+
+def _clean_up_product_triages(
+    protecode_client,
+    product_id:int,
+):
+    scan_result = protecode_client.scan_result(product_id)
+
+    redundant_triages_list = []
+    for component in scan_result.components():
+        for vulnerability in component.vulnerabilities():
+            if len(triages := list(vulnerability.triages())) == 1:
+                continue
+            redundant_triages_list.extend(
+                _find_redundant_triages(triages)
+            )
+
+    for triage_id in redundant_triages_list:
+        protecode_client.delete_triage(triage_id=triage_id)
+
+
+def clean_up_product_triages(
+    protecode_config_name: str,
+    product_id: int,
+):
+    protecode_client = ccc.protecode.client_from_config_name(protecode_config_name)
+    _clean_up_product_triages(
+        protecode_client=protecode_client,
+        product_id=product_id,
+    )
+
+
+def clean_up_triages_in_group(
+    protecode_config_name: str,
+    group_id: int,
+):
+    protecode_client = ccc.protecode.client_from_config_name(protecode_config_name)
+    for scan_result in protecode_client.list_apps(group_id):
+        print(f'Cleaning up {scan_result.name()}')
+        _clean_up_product_triages(
+            protecode_client=protecode_client,
+            # no sense in passing the scan-result directly as it is an abbreviated form without
+            # vulnerabilites
+            product_id=scan_result.product_id(),
+        )
